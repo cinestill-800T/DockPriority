@@ -2,6 +2,15 @@
 
 All notable changes to DockPriority are documented here.
 
+## [0.1.1] - 2026-07-20
+
+### Fixed
+
+- Fall back from an empty `AXWindows` result to `AXList` when resolving the
+  Dock frame.
+- Keep the Dock menu icon stable rather than updating it from Dock geometry.
+- Stabilize CI timing tests with bounded asynchronous polling.
+
 ## [0.1.0] - 2026-07-20
 
 ### Added

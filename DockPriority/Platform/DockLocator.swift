@@ -49,86 +49,46 @@ final class AccessibilityDockLocator: DockLocating {
     typealias RunningApplicationsProvider = @Sendable () -> [NSRunningApplication]
 
     private let isTrusted: TrustProvider
-    private let runningApplications: RunningApplicationsProvider
+    private let frameResolver: DockFrameResolving
 
     init(
         isTrusted: @escaping TrustProvider = { AXIsProcessTrusted() },
         runningApplications: @escaping RunningApplicationsProvider = {
             NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock")
-        }
+        },
+        frameResolver: DockFrameResolving? = nil
     ) {
         self.isTrusted = isTrusted
-        self.runningApplications = runningApplications
+        self.frameResolver = frameResolver ?? AccessibilityDockFrameResolver(
+            runningApplications: runningApplications
+        )
     }
 
     func dockDisplay(in displays: [DisplaySnapshot]) async throws -> DisplayIdentity? {
         guard isTrusted() else {
             throw DockLocationError.accessibilityPermissionDenied
         }
-        guard let dockApplication = runningApplications().first else {
-            throw DockLocationError.dockApplicationUnavailable
-        }
-
-        let applicationElement = AXUIElementCreateApplication(dockApplication.processIdentifier)
-        var windowsValue: CFTypeRef?
-        let windowsResult = AXUIElementCopyAttributeValue(
-            applicationElement,
-            kAXWindowsAttribute as CFString,
-            &windowsValue
-        )
-        guard windowsResult == .success else {
-            throw DockLocationError.dockWindowsUnavailable(windowsResult.rawValue)
-        }
-        guard let windows = windowsValue as? [AXUIElement], !windows.isEmpty else {
-            throw DockLocationError.dockFrameUnavailable
-        }
-
-        let frames = windows.compactMap(Self.frame(of:))
-        guard !frames.isEmpty else {
-            throw DockLocationError.dockFrameUnavailable
+        let frames: [CGRect]
+        do {
+            frames = try frameResolver.dockFrames()
+        } catch let error as DockFrameResolutionError {
+            switch error {
+            case .dockApplicationUnavailable:
+                throw DockLocationError.dockApplicationUnavailable
+            case let .dockWindowsUnavailable(code):
+                throw DockLocationError.dockWindowsUnavailable(code)
+            case .dockFrameUnavailable:
+                throw DockLocationError.dockFrameUnavailable
+            }
         }
 
         // The Dock sometimes exposes auxiliary windows. Choose the largest
         // window that is actually associated with an active display.
-        let sortedFrames = frames.sorted { lhs, rhs in
-            lhs.width * lhs.height > rhs.width * rhs.height
-        }
-        for frame in sortedFrames {
+        for frame in frames {
             if let identity = DockFrameAssociation.identity(containingDockFrame: frame, in: displays) {
                 return identity
             }
         }
         throw DockLocationError.dockDisplayNotFound
-    }
-
-    private static func frame(of element: AXUIElement) -> CGRect? {
-        var positionValue: CFTypeRef?
-        var sizeValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element,
-            kAXPositionAttribute as CFString,
-            &positionValue
-        ) == .success,
-        AXUIElementCopyAttributeValue(
-            element,
-            kAXSizeAttribute as CFString,
-            &sizeValue
-        ) == .success,
-        let positionValue,
-        let sizeValue,
-        CFGetTypeID(positionValue) == AXValueGetTypeID(),
-        CFGetTypeID(sizeValue) == AXValueGetTypeID() else {
-            return nil
-        }
-
-        var position = CGPoint.zero
-        var size = CGSize.zero
-        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size),
-              size.width > 0,
-              size.height > 0 else {
-            return nil
-        }
-        return CGRect(origin: position, size: size)
     }
 }

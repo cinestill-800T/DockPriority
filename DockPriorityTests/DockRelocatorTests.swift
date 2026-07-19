@@ -6,6 +6,15 @@ import Testing
 struct DockRelocatorTests {
     private let frame = CGRect(x: 1920, y: -200, width: 2560, height: 1440)
 
+    @Test func dockListFallbackFrameDerivesBottomEdge() throws {
+        let edgeProvider = AccessibilityDockEdgeProvider(
+            isTrusted: { true },
+            frameResolver: FallbackFrameResolver()
+        )
+
+        #expect(try edgeProvider.currentDockEdge() == .bottom)
+    }
+
     @Test func bottomGeometryTargetsTheRequestedDisplayCoordinates() {
         let configuration = DockRelocationConfiguration(
             horizontalAnchor: .right,
@@ -219,6 +228,30 @@ struct DockRelocatorTests {
             )
         )
     }
+}
+
+private struct FallbackFrameResolver: DockFrameResolving {
+    func dockFrames() throws -> [CGRect] {
+        let windows: [CGRect] = []
+        let windowFrames = DockAXFrameCandidateSelection.preferredWindowFrames(windows)
+        if !windowFrames.isEmpty { return windowFrames }
+
+        let frame = DockAXFrameCandidateSelection.listFrame(
+            among: [FallbackDockListNode()],
+            identifier: { $0.identifier },
+            role: { $0.role },
+            frame: { $0.frame },
+            children: { _ in [] }
+        )
+        guard let frame else { throw DockFrameResolutionError.dockFrameUnavailable }
+        return [frame]
+    }
+}
+
+private struct FallbackDockListNode {
+    let identifier = 1
+    let role = "AXList"
+    let frame = CGRect(x: 2774, y: 1363, width: 652, height: 49)
 }
 
 private enum TestMovementError: Error, Equatable, LocalizedError {

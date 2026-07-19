@@ -84,7 +84,7 @@ struct SystemDisplayInventoryTests {
         defer { inventory.stopObserving() }
 
         workspaceCenter.post(name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitUntil { recorder.values == [.screenUnlocked] }
 
         #expect(recorder.values == [.screenUnlocked])
     }
@@ -107,7 +107,7 @@ struct SystemDisplayInventoryTests {
         try await Task.sleep(for: .milliseconds(50))
         #expect(recorder.values.isEmpty)
 
-        try await Task.sleep(for: .milliseconds(300))
+        try await waitUntil { recorder.values == [.screenUnlocked] }
         #expect(recorder.values == [.screenUnlocked])
     }
 
@@ -131,6 +131,23 @@ struct SystemDisplayInventoryTests {
         try await Task.sleep(for: .milliseconds(100))
 
         #expect(recorder.values == [.systemWake])
+    }
+}
+
+private func waitUntil(
+    timeout: Duration = .seconds(1),
+    interval: Duration = .milliseconds(10),
+    condition: @Sendable () -> Bool
+) async throws {
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+
+    while true {
+        try Task.checkCancellation()
+        guard !condition() else { return }
+        let remaining = clock.now.duration(to: deadline)
+        guard remaining > .zero else { return }
+        try await Task.sleep(for: min(interval, remaining))
     }
 }
 

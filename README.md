@@ -96,8 +96,8 @@ or downloaded pair again with:
 
 ```sh
 scripts/package-release.sh --verify \
-  DockPriority-0.1.0-macos.zip \
-  DockPriority-0.1.0-macos.zip.sha256
+  DockPriority-0.1.1-macos.zip \
+  DockPriority-0.1.1-macos.zip.sha256
 ```
 
 ## Privacy

@@ -141,28 +141,34 @@ protocol DockEdgeProviding {
 }
 
 final class AccessibilityDockEdgeProvider: DockEdgeProviding {
+    typealias TrustProvider = @Sendable () -> Bool
+
+    private let isTrusted: TrustProvider
+    private let frameResolver: DockFrameResolving
+
+    init(
+        isTrusted: @escaping TrustProvider = { AXIsProcessTrusted() },
+        frameResolver: DockFrameResolving = AccessibilityDockFrameResolver()
+    ) {
+        self.isTrusted = isTrusted
+        self.frameResolver = frameResolver
+    }
+
     func currentDockEdge() throws -> DockEdge {
-        guard AXIsProcessTrusted() else {
+        guard isTrusted() else {
             throw DockRelocationError.accessibilityPermissionDenied
         }
-        guard let dockApplication = NSRunningApplication
-            .runningApplications(withBundleIdentifier: "com.apple.dock")
-            .first else {
-            throw DockRelocationError.dockApplicationUnavailable
+        let frames: [CGRect]
+        do {
+            frames = try frameResolver.dockFrames()
+        } catch let error as DockFrameResolutionError {
+            switch error {
+            case .dockApplicationUnavailable:
+                throw DockRelocationError.dockApplicationUnavailable
+            case .dockWindowsUnavailable, .dockFrameUnavailable:
+                throw DockRelocationError.dockFrameUnavailable
+            }
         }
-
-        let applicationElement = AXUIElementCreateApplication(dockApplication.processIdentifier)
-        var windowsValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            applicationElement,
-            kAXWindowsAttribute as CFString,
-            &windowsValue
-        ) == .success,
-        let windows = windowsValue as? [AXUIElement] else {
-            throw DockRelocationError.dockFrameUnavailable
-        }
-
-        let frames = windows.compactMap(Self.frame(of:))
         guard let dockFrame = frames.max(by: { lhs, rhs in
             lhs.width * lhs.height < rhs.width * rhs.height
         }) else {
@@ -172,26 +178,6 @@ final class AccessibilityDockEdgeProvider: DockEdgeProviding {
             for: dockFrame,
             displayFrames: Self.activeDisplayFrames()
         )
-    }
-
-    private static func frame(of element: AXUIElement) -> CGRect? {
-        var positionValue: CFTypeRef?
-        var sizeValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue) == .success,
-              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success,
-              let positionValue,
-              let sizeValue,
-              CFGetTypeID(positionValue) == AXValueGetTypeID(),
-              CFGetTypeID(sizeValue) == AXValueGetTypeID() else {
-            return nil
-        }
-        var position = CGPoint.zero
-        var size = CGSize.zero
-        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
-              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else {
-            return nil
-        }
-        return CGRect(origin: position, size: size)
     }
 
     private static func activeDisplayFrames() -> [CGRect] {

@@ -80,7 +80,7 @@ struct DockPriorityApp: App {
 
         MenuBarExtra(
             "DockPriority",
-            systemImage: coordinator.protectionState.isActive ? "shield.checkered" : "dock.rectangle",
+            systemImage: "dock.rectangle",
             isInserted: menuBarIconInsertionBinding
         ) {
             MenuBarContents()
