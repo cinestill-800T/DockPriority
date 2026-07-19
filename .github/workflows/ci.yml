@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Show toolchain
+        run: xcodebuild -version
+      - name: Build
+        run: >-
+          xcodebuild build -project DockPriority.xcodeproj -scheme DockPriority
+          -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+      - name: Unit tests
+        env:
+          DOCKPRIORITY_DERIVED_DATA: ${{ runner.temp }}/DockPriority-unit-tests
+          LLVM_PROFILE_FILE: ${{ runner.temp }}/DockPriority-unit-tests/default.profraw
+        run: |
+          xcodebuild build-for-testing \
+            -project DockPriority.xcodeproj \
+            -scheme DockPriority \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$DOCKPRIORITY_DERIVED_DATA" \
+            -only-testing:DockPriorityTests \
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_DEBUG_DYLIB=YES
+          UNIT_BUNDLE="$DOCKPRIORITY_DERIVED_DATA/Build/Products/Debug/DockPriority.app/Contents/PlugIns/DockPriorityTests.xctest"
+          DEBUG_DYLIB="$DOCKPRIORITY_DERIVED_DATA/Build/Products/Debug/DockPriority.app/Contents/MacOS/DockPriority.debug.dylib"
+          test -d "$UNIT_BUNDLE"
+          test -f "$DEBUG_DYLIB"
+          mkdir -p "$UNIT_BUNDLE/Contents/Frameworks"
+          cp "$DEBUG_DYLIB" "$UNIT_BUNDLE/Contents/Frameworks/"
+          xcrun xctest "$UNIT_BUNDLE"
