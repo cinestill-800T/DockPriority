@@ -440,13 +440,178 @@ struct DockPriorityCoordinatorTests {
         #expect(harness.coordinator.status == .relocationFailed("Relocation failed"))
     }
 
+    @Test func verifiedFirstRelocationDoesNotRetry() async {
+        let first = snapshot("first", isMain: true)
+        let second = snapshot("second", x: 1000)
+        let harness = makeHarness(
+            displays: [first, second],
+            state: priorityState([first, second]),
+            dockLocation: first.identity
+        )
+        harness.coordinator.refresh()
+        await harness.coordinator.waitForIdle()
+
+        harness.coordinator.chooseTemporaryTarget(second.identity)
+        await harness.coordinator.waitForIdle()
+
+        #expect(harness.relocator.targets == [second.identity])
+        #expect(harness.coordinator.status == .moved(second.identity))
+    }
+
+    @Test func persistentVerificationMismatchStopsAfterSecondRelocation() async {
+        let first = snapshot("first", isMain: true)
+        let second = snapshot("second", x: 1000)
+        let relocator = FakeRelocator()
+        relocator.locationUpdates = [false, false]
+        let harness = makeHarness(
+            displays: [first, second],
+            state: priorityState([first, second]),
+            dockLocation: first.identity,
+            relocator: relocator
+        )
+        harness.coordinator.refresh()
+        await harness.coordinator.waitForIdle()
+        harness.coordinator.chooseTemporaryTarget(second.identity)
+        await harness.coordinator.waitForIdle()
+
+        #expect(harness.relocator.targets == [second.identity, second.identity])
+        #expect(harness.coordinator.status == .relocationFailed("The Dock move could not be verified."))
+    }
+
+    @Test func secondRelocationCanSucceedAfterDelayedReadiness() async {
+        let first = snapshot("first", isMain: true)
+        let second = snapshot("second", x: 1000)
+        let relocator = FakeRelocator()
+        relocator.locationUpdates = [false, true]
+        let harness = makeHarness(
+            displays: [first, second],
+            state: priorityState([first, second]),
+            dockLocation: first.identity,
+            relocator: relocator
+        )
+        harness.coordinator.refresh()
+        await harness.coordinator.waitForIdle()
+        harness.coordinator.chooseTemporaryTarget(second.identity)
+        await harness.coordinator.waitForIdle()
+
+        #expect(harness.relocator.targets == [second.identity, second.identity])
+        #expect(harness.coordinator.status == .moved(second.identity))
+    }
+
+    @Test func dockFrameUnavailableVerificationRetriesOnce() async {
+        let first = snapshot("first", isMain: true)
+        let second = snapshot("second", x: 1000)
+        let locator = FakeLocator(current: first.identity)
+        let harness = makeHarness(
+            displays: [first, second],
+            state: priorityState([first, second]),
+            locator: locator
+        )
+        harness.coordinator.refresh()
+        await harness.coordinator.waitForIdle()
+        locator.errorsByCall[2] = DockLocationError.dockFrameUnavailable
+        harness.coordinator.chooseTemporaryTarget(second.identity)
+        await harness.coordinator.waitForIdle()
+
+        #expect(harness.relocator.targets == [second.identity, second.identity])
+        #expect(harness.coordinator.status == .moved(second.identity))
+    }
+
+    @Test func dockFrameUnavailableRelocationRetriesOnce() async {
+        let first = snapshot("first", isMain: true)
+        let second = snapshot("second", x: 1000)
+        let relocator = FakeRelocator()
+        relocator.errors = [DockRelocationError.dockFrameUnavailable]
+        let harness = makeHarness(
+            displays: [first, second],
+            state: priorityState([first, second]),
+            dockLocation: first.identity,
+            relocator: relocator
+        )
+        harness.coordinator.refresh()
+        await harness.coordinator.waitForIdle()
+        harness.coordinator.chooseTemporaryTarget(second.identity)
+        await harness.coordinator.waitForIdle()
+
+        #expect(harness.relocator.targets == [second.identity, second.identity])
+        #expect(harness.coordinator.status == .moved(second.identity))
+    }
+
+    @Test(arguments: [DockRelocationError.accessibilityPermissionDenied, .dockApplicationUnavailable])
+    func permissionAndProcessFailuresDoNotRetry(error: DockRelocationError) async {
+        let first = snapshot("first", isMain: true)
+        let second = snapshot("second", x: 1000)
+        let relocator = FakeRelocator()
+        relocator.error = error
+        let harness = makeHarness(
+            displays: [first, second],
+            state: priorityState([first, second]),
+            dockLocation: first.identity,
+            relocator: relocator
+        )
+        harness.coordinator.refresh()
+        await harness.coordinator.waitForIdle()
+        harness.coordinator.chooseTemporaryTarget(second.identity)
+        await harness.coordinator.waitForIdle()
+
+        #expect(harness.relocator.targets == [second.identity])
+    }
+
+    @Test func newGenerationDuringFirstDelayPreventsRetryAndLeavesGuardInactive() async {
+        let first = snapshot("first", isMain: true)
+        let second = snapshot("second", x: 1000)
+        let relocator = FakeRelocator()
+        relocator.locationUpdates = [false]
+        let delay = FakeDelay()
+        delay.suspendNextCall = true
+        let harness = makeHarness(
+            displays: [first, second],
+            state: priorityState([first, second]),
+            dockLocation: first.identity,
+            relocator: relocator,
+            reconciliationDelay: { duration in try await delay.sleep(for: duration) }
+        )
+        harness.coordinator.refresh()
+        await harness.coordinator.waitForIdle()
+        harness.coordinator.chooseTemporaryTarget(second.identity)
+        await waitUntil { delay.pendingContinuation != nil }
+
+        #expect(!harness.eventTap.isRelocationActive)
+        harness.coordinator.returnToPriority()
+        delay.resumePending()
+        await harness.coordinator.waitForIdle()
+
+        #expect(harness.relocator.targets == [second.identity])
+    }
+
+    @Test func stoppedTemporaryOneShotRemainsBounded() async {
+        let first = snapshot("first", isMain: true)
+        let second = snapshot("second", x: 1000)
+        let relocator = FakeRelocator()
+        relocator.locationUpdates = [false, false]
+        let harness = makeHarness(
+            displays: [first, second],
+            state: priorityState([first, second]),
+            dockLocation: first.identity,
+            relocator: relocator
+        )
+        harness.coordinator.refresh()
+        await harness.coordinator.waitForIdle()
+        harness.coordinator.chooseTemporaryTarget(second.identity)
+        await harness.coordinator.waitForIdle()
+
+        #expect(harness.coordinator.protectionState == .stopped)
+        #expect(harness.relocator.targets == [second.identity, second.identity])
+    }
+
     private func makeHarness(
         displays: [DisplaySnapshot],
         state: StoredPriorityState? = nil,
         dockLocation: DisplayIdentity? = nil,
         store: FakeStore? = nil,
         locator: FakeLocator? = nil,
-        relocator: FakeRelocator? = nil
+        relocator: FakeRelocator? = nil,
+        reconciliationDelay: @escaping @Sendable (Duration) async throws -> Void = { _ in }
     ) -> Harness {
         let inventory = FakeInventory(displays: displays)
         let store = store ?? FakeStore(state: state)
@@ -462,7 +627,8 @@ struct DockPriorityCoordinatorTests {
             store: store,
             watchdogScheduler: scheduler,
             eventTapController: eventTap,
-            dockEdgeProvider: FakeDockEdgeProvider(edge: .bottom)
+            dockEdgeProvider: FakeDockEdgeProvider(edge: .bottom),
+            reconciliationDelay: reconciliationDelay
         )
         return Harness(
             coordinator: coordinator,
@@ -546,6 +712,7 @@ private final class FakeInventory: DisplayInventory, @unchecked Sendable {
 private final class FakeLocator: DockLocating, @unchecked Sendable {
     var current: DisplayIdentity?
     var errors: [Error] = []
+    var errorsByCall: [Int: Error] = [:]
     var suspendNextCall = false
     private(set) var callCount = 0
     private(set) var pendingContinuation: CheckedContinuation<DisplayIdentity?, Error>?
@@ -556,6 +723,7 @@ private final class FakeLocator: DockLocating, @unchecked Sendable {
 
     func dockDisplay(in _: [DisplaySnapshot]) async throws -> DisplayIdentity? {
         callCount += 1
+        if let error = errorsByCall[callCount] { throw error }
         if !errors.isEmpty { throw errors.removeFirst() }
         if suspendNextCall {
             suspendNextCall = false
@@ -576,7 +744,9 @@ private final class FakeLocator: DockLocating, @unchecked Sendable {
 private final class FakeRelocator: DockRelocating, @unchecked Sendable {
     weak var locator: FakeLocator?
     var error: Error?
+    var errors: [Error] = []
     var suspendNextCall = false
+    var locationUpdates: [Bool] = []
     private(set) var targets: [DisplayIdentity] = []
     private(set) var concurrentCalls = 0
     private(set) var maximumConcurrentCalls = 0
@@ -587,6 +757,7 @@ private final class FakeRelocator: DockRelocating, @unchecked Sendable {
         maximumConcurrentCalls = max(maximumConcurrentCalls, concurrentCalls)
         targets.append(display.identity)
         defer { concurrentCalls -= 1 }
+        if !errors.isEmpty { throw errors.removeFirst() }
         if let error { throw error }
         if suspendNextCall {
             suspendNextCall = false
@@ -594,7 +765,31 @@ private final class FakeRelocator: DockRelocating, @unchecked Sendable {
                 pendingContinuation = continuation
             }
         }
-        locator?.current = display.identity
+        if locationUpdates.isEmpty || locationUpdates.removeFirst() {
+            locator?.current = display.identity
+        }
+    }
+
+    func resumePending() {
+        let continuation = pendingContinuation
+        pendingContinuation = nil
+        continuation?.resume()
+    }
+}
+
+private final class FakeDelay: @unchecked Sendable {
+    var suspendNextCall = false
+    private(set) var durations: [Duration] = []
+    private(set) var pendingContinuation: CheckedContinuation<Void, Never>?
+
+    func sleep(for duration: Duration) async throws {
+        durations.append(duration)
+        if suspendNextCall {
+            suspendNextCall = false
+            await withCheckedContinuation { continuation in
+                pendingContinuation = continuation
+            }
+        }
     }
 
     func resumePending() {
@@ -656,6 +851,7 @@ private final class FakeEventTapController: EventTapControlling {
     var isRunning = false
     var startError: Error?
     private(set) var relocationStates: [Bool] = []
+    private(set) var isRelocationActive = false
     private var handler: (@Sendable (MouseEventSnapshot) -> MouseEventDisposition)?
 
     func start(handler: @escaping @Sendable (MouseEventSnapshot) -> MouseEventDisposition) throws {
@@ -671,6 +867,7 @@ private final class FakeEventTapController: EventTapControlling {
 
     func setRelocationActive(_ active: Bool) {
         relocationStates.append(active)
+        isRelocationActive = active
     }
 
     func disposition(at point: CGPoint, sourceUserData: Int64 = 0) -> MouseEventDisposition {

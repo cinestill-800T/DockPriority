@@ -92,6 +92,7 @@ final class DockPriorityCoordinator: ObservableObject {
     private let watchdogScheduler: WatchdogScheduling
     private let eventTapController: EventTapControlling
     private let dockEdgeProvider: DockEdgeProviding
+    private let reconciliationDelay: @Sendable (Duration) async throws -> Void
     private let logger = Logger(
         subsystem: "io.github.cinestill800t.DockPriority",
         category: "coordinator"
@@ -108,7 +109,10 @@ final class DockPriorityCoordinator: ObservableObject {
         store: DisplayPriorityStoring,
         watchdogScheduler: WatchdogScheduling,
         eventTapController: EventTapControlling,
-        dockEdgeProvider: DockEdgeProviding = AccessibilityDockEdgeProvider()
+        dockEdgeProvider: DockEdgeProviding = AccessibilityDockEdgeProvider(),
+        reconciliationDelay: @escaping @Sendable (Duration) async throws -> Void = { duration in
+            try await Task.sleep(for: duration)
+        }
     ) {
         self.inventory = inventory
         self.locator = locator
@@ -117,6 +121,7 @@ final class DockPriorityCoordinator: ObservableObject {
         self.watchdogScheduler = watchdogScheduler
         self.eventTapController = eventTapController
         self.dockEdgeProvider = dockEdgeProvider
+        self.reconciliationDelay = reconciliationDelay
 
         do {
             rememberedDisplays = try store.load()?.normalized().orderedDisplays ?? []
@@ -355,38 +360,81 @@ final class DockPriorityCoordinator: ObservableObject {
                 status = .accessibilityPermissionRequired
                 return
             }
+            guard Self.isRecoverableDockFrameFailure(error) else {
+                status = .dockLocationFailed(Self.description(of: error))
+                return
+            }
             // An unknown/unavailable Dock location is recoverable: make one
             // relocation attempt, then verify it instead of spinning here.
             logger.error("Dock location unavailable before relocation: \(Self.description(of: error), privacy: .public)")
         }
 
-        guard isCurrent(requestGeneration, target: target.identity) else { return }
-        eventTapController.setRelocationActive(true)
-        defer { eventTapController.setRelocationActive(false) }
+        await relocateAndVerify(target, requestGeneration: requestGeneration)
+    }
 
-        do {
-            try await relocator.relocate(to: target)
+    /// Performs no more than two independent cursor-restoring gestures. The
+    /// relocator owns its short-lived event-tap bypass; this coordinator never
+    /// leaves that bypass active while waiting for Dock mode changes to settle.
+    private func relocateAndVerify(_ target: DisplaySnapshot, requestGeneration: UInt64) async {
+        for (attempt, delay) in [(1, Duration.milliseconds(500)), (2, Duration.milliseconds(250))] {
             guard isCurrent(requestGeneration, target: target.identity) else { return }
-
-            let verifiedLocation = try await locator.dockDisplay(in: activeDisplays)
-            guard isCurrent(requestGeneration, target: target.identity) else { return }
-            dockLocation = verifiedLocation
-            if verifiedLocation == target.identity {
-                status = persistenceStatus ?? .moved(target.identity)
-            } else {
-                status = .relocationFailed("The Dock move could not be verified.")
-            }
-        } catch {
-            guard isCurrent(requestGeneration, target: target.identity) else { return }
-            if Self.isAccessibilityFailure(error) {
-                status = .accessibilityPermissionRequired
-            } else if error is CancellationError {
+            do {
+                try await relocator.relocate(to: target)
+            } catch {
+                guard isCurrent(requestGeneration, target: target.identity) else { return }
+                if attempt == 1, Self.isRecoverableDockFrameFailure(error) {
+                    continue
+                }
+                applyRelocationFailure(error, requestGeneration: requestGeneration, target: target.identity)
                 return
-            } else {
-                let message = Self.description(of: error)
-                logger.error("Dock relocation failed: \(message, privacy: .public)")
-                status = .relocationFailed(message)
             }
+
+            guard isCurrent(requestGeneration, target: target.identity) else { return }
+            do {
+                try await reconciliationDelay(delay)
+            } catch {
+                return
+            }
+            guard isCurrent(requestGeneration, target: target.identity) else { return }
+
+            do {
+                let verifiedLocation = try await locator.dockDisplay(in: activeDisplays)
+                guard isCurrent(requestGeneration, target: target.identity) else { return }
+                dockLocation = verifiedLocation
+                if verifiedLocation == target.identity {
+                    status = persistenceStatus ?? .moved(target.identity)
+                    return
+                }
+                if attempt == 2 {
+                    status = .relocationFailed("The Dock move could not be verified.")
+                    return
+                }
+            } catch {
+                guard isCurrent(requestGeneration, target: target.identity) else { return }
+                if Self.isAccessibilityFailure(error) {
+                    status = .accessibilityPermissionRequired
+                    return
+                }
+                if !Self.isRecoverableDockFrameFailure(error) || attempt == 2 {
+                    status = .relocationFailed(Self.description(of: error))
+                    return
+                }
+            }
+        }
+    }
+
+    private func applyRelocationFailure(
+        _ error: Error,
+        requestGeneration: UInt64,
+        target: DisplayIdentity
+    ) {
+        guard isCurrent(requestGeneration, target: target) else { return }
+        if Self.isAccessibilityFailure(error) {
+            status = .accessibilityPermissionRequired
+        } else if !(error is CancellationError) {
+            let message = Self.description(of: error)
+            logger.error("Dock relocation failed: \(message, privacy: .public)")
+            status = .relocationFailed(message)
         }
     }
 
@@ -493,6 +541,14 @@ final class DockPriorityCoordinator: ObservableObject {
            error == .accessibilityPermissionDenied { return true }
         if let error = error as? EventTapControllerError,
            error == .accessibilityPermissionDenied { return true }
+        return false
+    }
+
+    private static func isRecoverableDockFrameFailure(_ error: Error) -> Bool {
+        if let error = error as? DockLocationError,
+           error == .dockFrameUnavailable { return true }
+        if let error = error as? DockRelocationError,
+           error == .dockFrameUnavailable { return true }
         return false
     }
 
