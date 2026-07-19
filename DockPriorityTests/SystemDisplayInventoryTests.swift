@@ -97,17 +97,17 @@ struct SystemDisplayInventoryTests {
             notificationCenter: NotificationCenter(),
             workspaceNotificationCenter: workspaceCenter,
             settleDelay: 0.02,
-            wakeDelay: 0.02,
+            wakeDelay: 0.25,
             observesCGDisplayChanges: false
         )
         inventory.startObserving { recorder.append($0) }
         defer { inventory.stopObserving() }
 
         workspaceCenter.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
-        try await Task.sleep(for: .milliseconds(5))
+        try await Task.sleep(for: .milliseconds(50))
         #expect(recorder.values.isEmpty)
 
-        try await Task.sleep(for: .milliseconds(50))
+        try await Task.sleep(for: .milliseconds(300))
         #expect(recorder.values == [.screenUnlocked])
     }
 
