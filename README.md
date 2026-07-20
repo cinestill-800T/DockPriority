@@ -25,6 +25,35 @@ frameworks, kill the Dock, run shell commands, or use AppleScript to move it.
 See [the architecture](docs/ARCHITECTURE.md) and the complete
 [implementation specification](docs/IMPLEMENTATION_SPEC.md).
 
+## How it differs from DockAnchor
+
+DockPriority is an independent derivative, not a drop-in replacement or an
+official DockAnchor release. The projects share the goal of keeping the Dock
+predictable on multi-display Macs, but make different trade-offs.
+
+| Area | DockAnchor | DockPriority |
+| --- | --- | --- |
+| Normal rule | Keeps the Dock anchored to a selected display. | Uses one explicit, ordered display priority: the first display that macOS reports as available wins. |
+| When the preferred display returns | Falls back when the anchor is removed. | Automatically returns to the highest-priority available display after a higher-priority display reconnects or macOS reports a display change. |
+| Display-mode changes | General real-time display detection. | Resumes the priority rule after reported resolution, refresh-rate, HDR, scaling, arrangement, mirroring, main-display, sleep, wake, or unlock changes. |
+| Temporary override | Profile-based configuration is available. | A one-click **Show Temporarily On** override does not alter the saved order and returns to priority mode on the next detectable display change, on request, or after restart. |
+| Configuration model | Profiles, including automatic profile switching. | Deliberately no profiles: one global order is always visible and editable. |
+| Recovery | Event-driven protection. | Display notifications plus a five-second verification pass help recover when an expected notification is missed. |
+
+For the workflow this project targets—such as a fixed 27-inch work display
+with a 38-inch secondary display, a monitor that is sometimes switched through
+a KVM, or frequent HDR/resolution changes—the priority model avoids having to
+reselect an anchor whenever the preferred display becomes available again.
+The temporary override is the escape hatch when macOS cannot observe a KVM or
+monitor-power change accurately.
+
+This is not a claim that DockPriority is universally better. DockAnchor offers
+features DockPriority intentionally does not, including profiles, automatic
+profile switching, visual monitor layout, appearance settings, and start-at-
+login controls. DockPriority also has a narrower platform target (macOS 15.4
+or later). Both applications require Accessibility permission and can act only
+on the display state macOS exposes.
+
 ## Requirements
 
 - macOS 15.4 or later
