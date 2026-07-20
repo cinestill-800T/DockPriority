@@ -128,7 +128,7 @@ struct SystemDisplayInventoryTests {
         workspaceCenter.post(name: NSWorkspace.didWakeNotification, object: nil)
         workspaceCenter.post(name: NSWorkspace.screensDidWakeNotification, object: nil)
         workspaceCenter.post(name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
-        try await Task.sleep(for: .milliseconds(100))
+        try await waitUntil { recorder.values == [.systemWake] }
 
         #expect(recorder.values == [.systemWake])
     }
